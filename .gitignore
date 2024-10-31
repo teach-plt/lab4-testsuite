@@ -1,6 +1,7 @@
 *~
 *.hi
 *.o
-.stack-work
-dist-newstyle
-stack.yaml.lock
+.stack-work/
+dist-newstyle/
+stack*.yaml.lock
+/lab4-testsuite.tar.gz
