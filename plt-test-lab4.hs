@@ -100,12 +100,15 @@ main = do
 
   let goodtot = length goodTests'
       badtot  = length badTests'
-  goodpass <- mconcat <$> forM goodTests' (runGood lab4)
-  badpass  <- mconcat <$> forM badTests'  (runBad  lab4)
+  goodpass <- getSum . mconcat <$> forM goodTests' (runGood lab4)
+  badpass  <- getSum . mconcat <$> forM badTests'  (runBad  lab4)
 
   putStrLn "### Summary ###"
-  putStrLn $ show (getSum goodpass) <> " of " <> show goodtot <> " good tests passed."
-  putStrLn $ show (getSum badpass)  <> " of " <> show badtot  <> " bad tests passed (approximate check, only checks if any error at all was reported)."
+  putStrLn $ show goodpass <> " of " <> show goodtot <> " good tests passed."
+  putStrLn $ show badpass  <> " of " <> show badtot  <> " bad tests passed (approximate check, only checks if any error at all was reported)."
+
+  let ok = goodpass == goodtot && badpass == badtot
+  if ok then exitSuccess else exitFailure
 
 -- * Run programs
 ------------------------------------------------------------------------
