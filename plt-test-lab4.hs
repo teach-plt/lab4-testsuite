@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP               #-}
+{-# LANGUAGE PatternSynonyms   #-}
 {-# LANGUAGE ViewPatterns      #-}
 
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
@@ -6,26 +7,22 @@
 
 -- | Test suite for lab 4
 
-#if !MIN_VERSION_base(4,18,0)
-import Control.Applicative (liftA2)
-#endif
-import Control.Monad
+import Control.Monad         (foldM, forM, when)
 
-import Data.Bifunctor
-import Data.Char
-import Data.Function
-import qualified Data.List as List
-import Data.Maybe
-import Data.Monoid
+import Data.Char             ( isSpace, toUpper )
+import Data.Function         ( (&) )
+import qualified Data.List   as List
+import Data.Monoid           ( Sum(getSum) )
 
-import System.Console.GetOpt
-import System.Directory
-import System.Environment
-import System.Exit
-import System.FilePath
-import System.IO
-import System.IO.Unsafe
-import System.Process
+import System.Console.GetOpt ( OptDescr(Option), ArgDescr(ReqArg, NoArg), pattern RequireOrder, getOpt )
+import System.Directory      ( doesDirectoryExist, getCurrentDirectory, listDirectory, setCurrentDirectory
+                             , exeExtension )
+import System.Environment    ( getArgs, lookupEnv )
+import System.Exit           ( ExitCode(..), exitFailure, exitSuccess )
+import System.FilePath       ( (<.>), (</>), isRelative, joinPath, takeBaseName )
+import System.IO             ( BufferMode(LineBuffering), Handle, hIsTerminalDevice, hSetBuffering, hPutStr, hPutStrLn, stderr, stdout)
+import System.IO.Unsafe      ( unsafePerformIO )
+import System.Process        ( readProcessWithExitCode, showCommandForUser )
 
 -- * Configure
 ------------------------------------------------------------------------
@@ -38,8 +35,11 @@ executable_name = "lab4" <.> exeExtension
 was_failure :: String -> Bool
 was_failure = ("ERROR" `List.isInfixOf`) . map toUpper
 
-goodTests :: [ (FilePath, String, String) ]
-goodTests =
+type GoodTest  = (FilePath, String, String)
+type GoodTests = [GoodTest]
+
+defaultGoodTests :: GoodTests
+defaultGoodTests =
   [ ("good/001.hs",    "-v", "7"         )
   , ("good/002.hs",    "-n", "5"         )
   , ("good/003.hs",    "-v", "5050"      )
@@ -75,8 +75,58 @@ goodTests =
   , ("good/shadow2.hs","-n", "1"         )
   ]
 
+type BadTestDirs = [FilePath]
+
+defaultBadTestDirs :: BadTestDirs
+defaultBadTestDirs = ["bad"]
+
+data Options = Options
+  { makeFlag        :: Bool
+  , goodTests       :: GoodTests
+  , badTestDirs     :: BadTestDirs
+  }
+
+defaultOptions :: Options
+defaultOptions = Options
+  { makeFlag    = True
+  , goodTests   = []
+  , badTestDirs = []
+  }
+
 debug :: String -> IO ()
 debug = putStrLn
+
+-- * Options
+------------------------------------------------------------------------
+
+optDescr :: [OptDescr (Options -> Maybe Options)]
+optDescr =
+    [ Option []    ["no-make"] (NoArg  disableMake               ) "do not run make"
+    , Option ['g'] ["good"]    (ReqArg addGood "FILE,MODE,RESULT") "good test case FILE, call-by-name or -value MODE, expected RESULT"
+    , Option ['b'] ["bad"]     (ReqArg addBad  "FILE"            ) "bad test case FILE"
+    ]
+  where
+    disableMake :: Options -> Maybe Options
+    disableMake options = Just $ options { makeFlag = False }
+
+    -- Parse the given program argument and add it to the 'Options' structure.
+    --
+    -- Fails if argument is not a triple of the form @FILE,{n,v},VALUE@.
+    addGood :: String -> Options -> Maybe Options
+    addGood (splitOn ',' -> [f,m,r]) options = Just $
+      options { goodTests = (f,'-':m,r) : goodTests options }
+    addGood _                        _       = Nothing
+
+    addBad :: FilePath -> Options -> Maybe Options
+    addBad f options = Just $
+      options { badTestDirs = f : badTestDirs options }
+
+usage :: IO a
+usage = do
+  hPutStrLn stderr "Usage: plt-test-lab4 [--no-make] [-g|--good FILE,MODE,RESULT]... [-b|--bad FILE]..."
+  hPutStrLn stderr "           path_to_solution" -- "The path to the directory where your solution is located"
+  exitFailure
+
 
 -- * Main
 ------------------------------------------------------------------------
@@ -88,6 +138,7 @@ main = do
   -- In various contexts this is guessed incorrectly
   hSetBuffering stdout LineBuffering
 
+  -- Parse options.
   testdir <- getCurrentDirectory
   (codedir, domake, (goodTests, badTests)) <- parseArgs =<< getArgs
   let adjustPath f = if isRelative f then joinPath [testdir,f] else f
@@ -95,20 +146,46 @@ main = do
       badTests'    = map adjustPath          badTests
       lab4         = "." </> executable_name
 
+  -- Build the SUT.
   setCurrentDirectory codedir
   when domake $ runPrgNoFail_ "make" [] ""
 
+   -- Run the tests.
   let goodtot = length goodTests'
       badtot  = length badTests'
   goodpass <- getSum . mconcat <$> forM goodTests' (runGood lab4)
   badpass  <- getSum . mconcat <$> forM badTests'  (runBad  lab4)
 
+  -- Report results.
   putStrLn "### Summary ###"
   putStrLn $ show goodpass <> " of " <> show goodtot <> " good tests passed."
   putStrLn $ show badpass  <> " of " <> show badtot  <> " bad tests passed (approximate check, only checks if any error at all was reported)."
 
   let ok = goodpass == goodtot && badpass == badtot
   if ok then exitSuccess else exitFailure
+
+parseArgs :: [String] -> IO (FilePath, Bool, TestSuite)
+parseArgs argv = case getOpt RequireOrder optDescr argv of
+
+  (o,[codedir],[]) -> do
+    Options doMake good bad <- maybe usage (return . defaultIfNoTests) $
+      foldM (&) defaultOptions o
+    let listHSFiles d          = map (d </>) . filter (".hs" `List.isSuffixOf`) <$> listDirectory d
+    let expandPath  f          = doesDirectoryExist f >>= \b -> if b then listHSFiles f else return [f]
+    let expandPathGood (f,m,r) = map (\ f' -> (f',m,r)) <$> expandPath f
+    goodTests <- concat <$> mapM expandPathGood good
+    badTests  <- concat <$> mapM expandPath bad
+    return (codedir, doMake, (goodTests, badTests))
+
+  (_,_,_) -> usage
+
+-- | If no testcases were supplied on the command line, use the default set.
+--
+defaultIfNoTests :: Options -> Options
+defaultIfNoTests options@(Options make good bad)
+  | null good && null bad = Options make defaultGoodTests defaultBadTestDirs
+  | otherwise             = options
+
 
 -- * Run programs
 ------------------------------------------------------------------------
@@ -138,8 +215,7 @@ runPrgNoFail exe flags input = do
       return (out,err)
 
 runGood :: FilePath -> (FilePath,String,String) -> IO (Sum Int)
-runGood lab4 good = do
-  let (file,mode,expect) = good
+runGood lab4 (file, mode, expect) = do
   putStrLn $ color blue $ "--- " <> takeBaseName file <> " ---"
   putStrLn $ "     Mode: " <> mode
   putStrLn $ "Expecting: " <> expect
@@ -245,54 +321,6 @@ reportError :: String         -- ^ command that failed
             -> IO ()
 reportError = reportErrorColor red
 
--- * Options
-------------------------------------------------------------------------
-
-data Options = Options
-  { makeFlag        :: Bool
-  , testSuiteOption :: Maybe TestSuite
-  }
-
-disableMake :: Options -> Maybe Options
-disableMake options = Just $ options { makeFlag = False }
-
-addGood :: String -> Options -> Maybe Options
-addGood (splitOn ',' -> [f,m,r]) options = Just $ options { testSuiteOption = Just $ maybe ([testCase],[]) (first (testCase:)) $ testSuiteOption options }
-  where
-    testCase = (f,'-':m,r)
-addGood _                        _       = Nothing
-
-addBad :: FilePath -> Options -> Maybe Options
-addBad f options = Just $ options { testSuiteOption = Just $ maybe ([],[f]) (second (f:)) $ testSuiteOption options }
-
-optDescr :: [OptDescr (Options -> Maybe Options)]
-optDescr = [ Option []    ["no-make"] (NoArg  disableMake               ) "do not run make"
-           , Option ['g'] ["good"]    (ReqArg addGood "FILE,MODE,RESULT") "good test case FILE, call-by-name or -value MODE, expected RESULT"
-           , Option ['b'] ["bad"]     (ReqArg addBad  "FILE"            ) "bad test case FILE"
-           ]
-
-parseArgs :: [String] -> IO (FilePath, Bool, TestSuite)
-parseArgs argv = case getOpt RequireOrder optDescr argv of
-
-  (o,[codedir],[]) -> do
-    let defaultOptions = Options{ makeFlag = True, testSuiteOption = Nothing }
-    options <- maybe usage return $ foldM (&) defaultOptions o
-    let testSuite              = fromMaybe (goodTests,["bad"]) $ testSuiteOption options
-    let listHSFiles d          = map (d </>) . filter (".hs" `List.isSuffixOf`) <$> listDirectory d
-    let expandPath  f          = doesDirectoryExist f >>= \b -> if b then listHSFiles f else return [f]
-    let expandPathGood (f,m,r) = map (\ f' -> (f',m,r)) <$> expandPath f
-    testSuite' <- mapTupleM (concatMapM expandPathGood) (concatMapM expandPath) testSuite
-    return (codedir, makeFlag options, testSuite')
-
-  (_,_,_) -> usage
-
-usage :: IO a
-usage = do
-  hPutStrLn stderr "Usage: plt-test-lab4 [--no-make] [-g|--good FILE,MODE,RESULT]... [-b|--bad FILE]..."
-  hPutStrLn stderr "           path_to_solution" -- "The path to the directory where your solution is located"
-  exitFailure
-
-
 -- * General utilities
 ------------------------------------------------------------------------
 
@@ -315,12 +343,6 @@ supportsPretty =
     hSupportsANSI h = (&&) <$> hIsTerminalDevice h <*> (not <$> isDumb)
       where
         isDumb = (== Just "dumb") <$> lookupEnv "TERM"
-
-concatMapM :: Monad m => (a -> m [b]) -> [a] -> m [b]
-concatMapM f = fmap concat . mapM f
-
-mapTupleM :: Applicative f => (a -> f c) -> (b -> f d) -> (a,b) -> f (c,d)
-mapTupleM f g (a,b) = liftA2 (,) (f a) (g b)
 
 first3 :: (a -> d) -> (a,b,c) -> (d,b,c)
 first3 f (a,b,c) = (f a,b,c)
