@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP               #-}
+{-# LANGUAGE BlockArguments    #-}
 {-# LANGUAGE PatternSynonyms   #-}
 {-# LANGUAGE ViewPatterns      #-}
 
@@ -7,7 +8,7 @@
 
 -- | Test suite for lab 4
 
-import Control.Monad         (foldM, forM, when)
+import Control.Monad         (foldM, forM, void, when)
 
 import Data.Char             ( isSpace, toUpper )
 import Data.Function         ( (&) )
@@ -194,7 +195,7 @@ runPrgNoFail_ :: FilePath -- ^ Executable
               -> [String] -- ^ Flags
               -> String   -- ^ Standard input
               -> IO ()
-runPrgNoFail_ exe flags input = runPrgNoFail exe flags input >> return ()
+runPrgNoFail_ exe flags input = void $ runPrgNoFail exe flags input
 
 runPrgNoFail :: FilePath -- ^ Executable
              -> [String] -- ^ Flag
@@ -219,19 +220,24 @@ runGood lab4 (file, mode, expect) = do
   putStrLn $ color blue $ "--- " <> takeBaseName file <> " ---"
   putStrLn $ "     Mode: " <> mode
   putStrLn $ "Expecting: " <> expect
-  (exitval,trimEnd -> result,_) <- readProcessWithExitCode lab4 [mode, file] ""
-  if (exitval /= ExitSuccess) then do
+  (exitval, trimEnd -> result, err) <- readProcessWithExitCode lab4 [mode, file] ""
+  let
+    done r = do
+      -- Print standard error
+      unlessNull (trimEnd err) \ err ->
+        putStrLn $ "   StdErr: " ++ color red err
+      putStrLn ""
+      return r
+  if exitval /= ExitSuccess then do
       putStrLn $ color red "Error"
-      putStrLn ""
-      return 0
-  else if (result == expect) then do
+      done 0
+  else if result == expect then do
       putStrLn $ "   Output: " ++ color green result
-      putStrLn ""
-      return 1
+      done 1
   else do
       putStrLn $ "   Output: " ++ color red result
-      putStrLn ""
-      return 0
+      done 0
+
 
 runBad :: FilePath -> FilePath -> IO (Sum Int)
 runBad lab4 bad = do
@@ -362,6 +368,9 @@ whenJust Nothing  _ = pure ()
 ifNull :: [a] -> b -> ([a] -> b) -> b
 ifNull [] b _ = b
 ifNull as _ f = f as
+
+unlessNull :: Applicative m => [a] -> ([a] -> m ()) -> m ()
+unlessNull xs = ifNull xs (pure ())
 
 replaceNull :: [a] -> [a] -> [a]
 replaceNull as xs = ifNull as xs id
