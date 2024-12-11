@@ -224,8 +224,9 @@ runGood lab4 (file, mode, expect) = do
   let
     done r = do
       -- Print standard error
-      unlessNull (trimEnd err) \ err ->
-        putStrLn $ "   StdErr: " ++ color red err
+      unlessNull (trimEnd err) \ err -> do
+        putStrLn $ "   StdErr:"
+        putStrLn $ color red err
       putStrLn ""
       return r
   if exitval /= ExitSuccess then do
