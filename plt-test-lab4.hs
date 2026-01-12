@@ -72,6 +72,7 @@ defaultGoodTests =
   , ("good/018.hs",    "-n", "2"         )
   , ("good/019.hs",    "-v", "0"         )
   , ("good/019.hs",    "-n", "0"         )
+  , ("good/020.hs",    "-v", "1"         )
   , ("good/shadow.hs", "-n", "1"         )
   , ("good/shadow2.hs","-n", "1"         )
   ]
