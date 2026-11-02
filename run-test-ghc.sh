@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 
 # Programming Language Technology (Chalmers DAT151 / GU DIT231)
-# (C) 2022-25 Andreas Abel
+# (C) 2022-26 Andreas Abel and Magnus Myreen
 # All rights reserved.
 
 if [ "$1" == "" -o  "$1" == "-h" -o "$1" == "--help" ]; then
